@@ -1,0 +1,127 @@
+# 3.9.2-buster = Debian 10 has only g++ 8
+image: python:3.9.2-buster
+
+stages:
+  - test
+  - compile
+  - deploy
+
+before_script:
+  - pip install -r requirements.txt
+  # For debugging
+  - python --version
+  - jupyter kernelspec list
+  - ls -la
+  - pwd
+  - git remote -vv
+  - git branch -avv
+
+test-stripout:  # test if nbstripout was used
+  stage: test
+  tags:
+    - shared
+  script:
+    # --dry-run is not useful at all: https://github.com/kynan/nbstripout/issues/152
+    # manually run nbstripout to stdout and diff with input
+    - for f in *.ipynb; do echo nbstripout ${f}; nbstripout --textconv ${f} | diff ${f} - ; done
+
+test-sample-solutions:  # test if nbstripout was used
+  stage: test
+  tags:
+    - shared
+  script:
+    - for f in [0-9][0-9]_*.ipynb; do [ ${f} != 00_student_instructions.ipynb ] && cp ${f} ${f%.ipynb}-perfect-solution.ipynb ; done
+    - ls -l
+    # strip custom tests -> looks like a student implemented exactly the sample solution
+    - for f in *-perfect-solution.ipynb; do ./util/process_nb.py --tag --strip-custom-tests --in-place ${f}; done
+    # grade this "perfect solution"
+    - for f in *-perfect-solution.ipynb; do echo ${f}; ./util/grade.py --sample-solution ${f%-perfect-solution.ipynb}.ipynb --notebook ${f}; done
+
+compile-cpp:
+  image: gcc:10.4-buster
+  stage: compile
+  needs: []
+  tags:
+    - shared
+  before_script:
+    # do not install the python requirements
+    - g++ --version
+  script:
+    - cd cpp
+    - ls -la
+    - g++ -std=c++20 -o encode encode.cpp base64.cpp
+    - g++ -std=c++20 -o get_notebook get_notebook.cpp base64.cpp
+  artifacts:
+    untracked: false
+    when: always
+    expire_in: 3 days
+    paths:
+      - ./cpp/encode
+      - ./cpp/get_notebook
+
+compile-node:
+  image: node:17.9.1-slim
+  stage: compile
+  needs: []
+  tags:
+    - shared
+  before_script:
+    - node --version
+  script:
+    - cd node
+    - npm install javascript-obfuscator
+    - node_modules/javascript-obfuscator/bin/javascript-obfuscator get_notebook.js \
+        --compact true \
+        --numbers-to-expressions true \
+        --rename-properties false \
+        --rename-globals true \
+        --control-flow-flattening true \
+        --control-flow-flattening true \
+        --dead-code-injection true \
+        --split-strings true \
+        --string-array true \
+        --string-array-shuffle true \
+        --string-array-encoding rc4 \
+        --target node
+    - mv get_notebook-obfuscated.js get_notebook
+  artifacts:
+    untracked: false
+    when: always
+    expire_in: 3 days
+    paths:
+      - ./node/get_notebook
+
+generate-student-versions:
+  stage: deploy
+  needs: []
+  tags:
+    - shared
+  script:
+    - for f in [0-9][0-9]_*.ipynb; do echo ${f}; ./util/process_nb.py --tag --strip-live-demos --strip-solutions --in-place ${f}; done
+  artifacts:
+    untracked: false
+    when: always
+    expire_in: 14 days
+    paths:
+      - ./*.ipynb
+
+encode-student-versions:
+  stage: deploy
+  needs: [generate-student-versions, compile-cpp]
+  tags:
+    - shared
+  before_script:
+    # do not install the python requirements
+    - g++ --version
+  script:
+    - ls -la
+    - ls -la cpp
+    # encode NN_*.ipynb and name it NN
+    - for f in [0-9][0-9]_*.ipynb; do echo ${f} "->"  ${f%.ipynb}; ./cpp/encode ${f}  ${f%.ipynb}; done
+    - ls -la
+  artifacts:
+    untracked: false
+    when: always
+    expire_in: 14 days
+    paths:
+      - ./[0-9][0-9]*

@@ -1,0 +1,18 @@
+Bootstrap: docker
+From: python:3.9.2
+
+%files
+    requirements.txt
+
+%post
+    pip install -r /requirements.txt
+
+%runscript
+    date
+    pwd
+    ls -la
+    df -Th
+    pip freeze
+
+%labels
+    Author Johannes Lange
